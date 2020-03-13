@@ -91,6 +91,9 @@
 			interrupt-parent = <&intc>;
 			interrupts = <6>;
 
+			#interrupt-cells = <2>;
+			interrupt-controller;
+
 			gpio0: bank@0 {
 				reg = <0>;
 				compatible = "mtk,mt7621-gpio-bank";
