@@ -14,8 +14,18 @@ of a case sensitive file system.
 You need gcc, binutils, bzip2, flex, python, perl, make, find, grep, diff,
 unzip, gawk, getopt, subversion, libz-dev and libc headers installed.
 
+0.8 Clone the forked openwrt repo from Luminancity:
+    git clone git@github.com:luminancity/openwrt.git
+
+0.9 Clone the evc_apps repo into the root directory and check out the desired branch/tag
+    An evc_apps subdir shall be created under the root directory. It contains all
+    applications developed by Luminancity.
+
 1. Run "./scripts/feeds update -a" to obtain all the latest package definitions
 defined in feeds.conf / feeds.conf.default
+
+2.1 Check the diff of the .config file. It is confused after feed update. Restore the original
+    version located in the repo.
 
 2. Run "./scripts/feeds install -a" to install symlinks for all obtained
 packages into package/feeds/
@@ -23,12 +33,28 @@ packages into package/feeds/
 3. Run "make menuconfig" to select your preferred configuration for the
 toolchain, target system & firmware packages.
 
-4. Run "make" to build your firmware. This will download all sources, build
+4. Run "make -j4" to build your firmware. This will download all sources, build
 the cross-compile toolchain and then cross-compile the Linux kernel & all
 chosen applications for your target system.
+
+5. The flash image will be generated under bin/targets/--/--/--/*-sysupgrade.bin
+   The size shall be ~12M. It is suitable for web flashing.
 
 Sunshine!
 	Your OpenWrt Community
 	http://www.openwrt.org
 
 
+Teljes clean:
+make clean
+scripts/feed clean
+Torolni a tartalmukat: /bin /build_dir /staging_dir /tmp
+
+
+#STM32 prgramozasa canen
+service evc_control disable
+aramtalaitas, vissza
+/root/evc_flasher
+(ido 1-2p)
+service evc_control enable
+reboot
