@@ -1,0 +1,71 @@
+
+/dts-v1/;
+
+#include "OMEGA2.dtsi"
+
+/ {
+	compatible = "onion,omega2p", "onion,omega2", "mediatek,mt7628an-soc";
+	model = "Lumi EVC";
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x8000000>;
+	};
+
+	spi {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		compatible = "spi-gpio";
+
+		gpio-sck = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+		gpio-miso = <&gpio0 1 GPIO_ACTIVE_HIGH>;
+		gpio-mosi = <&gpio0 2 GPIO_ACTIVE_HIGH>;
+		cs-gpios = <&gpio0 0 GPIO_ACTIVE_HIGH>;
+		num-chipselects = <1>;
+
+		status = "okay";
+
+		can0: can@0 {
+			compatible = "microchip,mcp2515";
+			reg = <0>;
+			interrupt-parent = <&gpio0>;
+			interrupts = <14 8>;
+
+			spi-max-frequency = <1000000>;
+
+			status = "okay";
+		};
+	};
+
+};
+
+&firmware {
+	reg = <0x50000 0x1fb0000>;
+};
+
+&system_led {
+	label = "omega2p:amber:system";
+};
+
+&i2c {
+	mcp7940x: mcp7940x@6f {
+		compatible = "microchip,mcp7940x";
+		reg = <0x6f>;
+		status = "okay";
+	};
+
+	mma8653: mma8653@1d {
+		compatible = "fsl,mma8653";
+		reg = <0x1d>;
+		status="okay";
+	};
+};
+
+&sdhci {
+	status = "disabled";
+};
+
+&uart1 {
+	rts-gpios = <&gpio0 15 GPIO_ACTIVE_HIGH>;
+};

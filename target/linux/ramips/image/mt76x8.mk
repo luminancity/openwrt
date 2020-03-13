@@ -160,6 +160,14 @@ define Device/omega2p
 endef
 TARGET_DEVICES += omega2p
 
+define Device/lumi-evc
+  DTS := LUMI-EVC
+  IMAGE_SIZE := $(ralink_default_fw_size_32M)
+  DEVICE_TITLE := Luminancity EVC
+  DEVICE_PACKAGES:= kmod-usb2 kmod-usb-ohci uboot-envtools kmod-sdhci-mt7620
+endef
+TARGET_DEVICES += lumi-evc
+
 define Device/pbr-d1
   DTS := PBR-D1
   IMAGE_SIZE := $(ralink_default_fw_size_16M)
