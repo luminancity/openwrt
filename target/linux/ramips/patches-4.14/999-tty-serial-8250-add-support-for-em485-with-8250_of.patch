@@ -1,0 +1,246 @@
+From 9b14b30ac8c0d6f7c0c74c7de59b1e1db1f5ad98 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Szentendrei=20Tam=C3=A1s?= <szentendrei.tamas@prolan.hu>
+Date: Wed, 20 Mar 2019 15:04:39 +0100
+Subject: [PATCH] tty/serial/8250: add support for em485 with 8250_of, fix
+ mt76x8 irq quirk
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This patch adds support for em485 mode on systems where the 8250 driver
+is probed using the generic DT implementation. The patch also adds a
+hrtimer to trigger the interrupt handler routine of the port when the
+rs485 transmission cannot be stopped after TX buffers are empty. This
+is needed because the 8250 compatible UART hardware on the mt76x8
+platform does not trigger an interrupt on empty TX shift register
+when FIFOs are enabled, the last interrupt is issued when TX FIFO
+is below a set threshold. This could cause the RS485 TX stop routines
+to never trigger and the RTS line to get stuck.
+
+Signed-off-by: Szentendrei Tamás <szentendrei.tamas@prolan.hu>
+---
+ drivers/tty/serial/8250/8250_of.c   | 33 +++++++++++++++++
+ drivers/tty/serial/8250/8250_port.c | 73 +++++++++++++++++++++++++++++++++++--
+ include/linux/serial_8250.h         |  2 +
+ 3 files changed, 104 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/tty/serial/8250/8250_of.c b/drivers/tty/serial/8250/8250_of.c
+index 3613a6aab..8b9333990 100644
+--- a/drivers/tty/serial/8250/8250_of.c
++++ b/drivers/tty/serial/8250/8250_of.c
+@@ -53,6 +53,36 @@ static inline void tegra_serial_handle_break(struct uart_port *port)
+ }
+ #endif
+ 
++static int of_serial_rs485_config(struct uart_port *port,
++                                  struct serial_rs485 *rs485)
++{
++        struct uart_8250_port *up = up_to_u8250p(port);
++
++        /* Clamp the delays to [0, 100ms] */
++        rs485->delay_rts_before_send = min(rs485->delay_rts_before_send, 100U);
++        rs485->delay_rts_after_send  = min(rs485->delay_rts_after_send, 100U);
++
++        port->rs485 = *rs485;
++
++        /*
++         * Both serial8250_em485_init and serial8250_em485_destroy
++         * are idempotent
++         */
++        if (rs485->flags & SER_RS485_ENABLED) {
++                int ret = serial8250_em485_init(up);
++
++                if (ret) {
++                        rs485->flags &= ~SER_RS485_ENABLED;
++                        port->rs485.flags &= ~SER_RS485_ENABLED;
++                }
++                return ret;
++        }
++
++        serial8250_em485_destroy(up);
++
++        return 0;
++}
++
+ /*
+  * Fill a struct uart_port for a given device node
+  */
+@@ -175,6 +205,8 @@ static int of_platform_serial_setup(struct platform_device *ofdev,
+ 	     of_device_is_compatible(np, "fsl,16550-FIFO64")))
+ 		port->handle_irq = fsl8250_handle_irq;
+ 
++	port->rs485_config = of_serial_rs485_config;
++
+ 	return 0;
+ err_dispose:
+ 	irq_dispose_mapping(port->irq);
+@@ -235,6 +267,7 @@ static int of_platform_serial_probe(struct platform_device *ofdev)
+ 	info->type = port_type;
+ 	info->line = ret;
+ 	platform_set_drvdata(ofdev, info);
++
+ 	return 0;
+ err_dispose:
+ 	irq_dispose_mapping(port8250.port.irq);
+diff --git a/drivers/tty/serial/8250/8250_port.c b/drivers/tty/serial/8250/8250_port.c
+index 7691acb85..69944fa4f 100644
+--- a/drivers/tty/serial/8250/8250_port.c
++++ b/drivers/tty/serial/8250/8250_port.c
+@@ -574,6 +574,7 @@ static inline void serial8250_em485_rts_after_send(struct uart_8250_port *p)
+ 
+ static enum hrtimer_restart serial8250_em485_handle_start_tx(struct hrtimer *t);
+ static enum hrtimer_restart serial8250_em485_handle_stop_tx(struct hrtimer *t);
++static enum hrtimer_restart serial8250_em485_handle_soft_irq(struct hrtimer *t);
+ 
+ void serial8250_clear_and_reinit_fifos(struct uart_8250_port *p)
+ {
+@@ -632,10 +633,15 @@ int serial8250_em485_init(struct uart_8250_port *p)
+ 		     HRTIMER_MODE_REL);
+ 	hrtimer_init(&p->em485->start_tx_timer, CLOCK_MONOTONIC,
+ 		     HRTIMER_MODE_REL);
++	hrtimer_init(&p->em485->soft_irq_timer, CLOCK_MONOTONIC,
++		     HRTIMER_MODE_REL);
+ 	p->em485->stop_tx_timer.function = &serial8250_em485_handle_stop_tx;
+ 	p->em485->start_tx_timer.function = &serial8250_em485_handle_start_tx;
+ 	p->em485->port = p;
+ 	p->em485->active_timer = NULL;
++	p->em485->soft_irq_timer.function = &serial8250_em485_handle_soft_irq;
++	/* Set soft irq default timeout to correspond 9600 8N1 default  */
++	p->em485->irq_timeout = ((NSEC_PER_MSEC * 11) / 9600) * MSEC_PER_SEC;
+ 	serial8250_em485_rts_after_send(p);
+ 
+ 	return 0;
+@@ -662,6 +668,7 @@ void serial8250_em485_destroy(struct uart_8250_port *p)
+ 
+ 	hrtimer_cancel(&p->em485->start_tx_timer);
+ 	hrtimer_cancel(&p->em485->stop_tx_timer);
++	hrtimer_cancel(&p->em485->soft_irq_timer);
+ 
+ 	kfree(p->em485);
+ 	p->em485 = NULL;
+@@ -1442,6 +1449,7 @@ static void serial8250_stop_rx(struct uart_port *port)
+ 
+ static void __do_stop_tx_rs485(struct uart_8250_port *p)
+ {
++
+ 	serial8250_em485_rts_after_send(p);
+ 
+ 	/*
+@@ -1475,6 +1483,24 @@ static enum hrtimer_restart serial8250_em485_handle_stop_tx(struct hrtimer *t)
+ 	serial8250_rpm_put(p);
+ 	return HRTIMER_NORESTART;
+ }
++static enum hrtimer_restart serial8250_em485_handle_soft_irq(struct hrtimer *t)
++{
++	struct uart_8250_em485 *em485;
++	struct uart_8250_port *up;
++	struct uart_port *port;
++	unsigned long flags;
++
++	em485 = container_of(t, struct uart_8250_em485, soft_irq_timer);
++	up = em485->port;
++	port = &up->port;
++
++	serial8250_rpm_get(up);
++	spin_lock_irqsave(&up->port.lock, flags);
++	port->handle_irq(port);
++	spin_unlock_irqrestore(&up->port.lock, flags);
++	serial8250_rpm_put(up);
++	return HRTIMER_NORESTART;
++}
+ 
+ static void start_hrtimer_ms(struct hrtimer *hrt, unsigned long msec)
+ {
+@@ -1523,8 +1549,11 @@ static inline void __stop_tx(struct uart_8250_port *p)
+ 		 * shift register are empty. It is for device driver to enable
+ 		 * interrupt on TEMT.
+ 		 */
+-		if ((lsr & BOTH_EMPTY) != BOTH_EMPTY)
++		if ((lsr & BOTH_EMPTY) != BOTH_EMPTY) {
++			ktime_t t = ktime_set(0, em485->irq_timeout);
++			hrtimer_start(&em485->soft_irq_timer, t, HRTIMER_MODE_REL);
+ 			return;
++		}
+ 
+ 		em485->active_timer = NULL;
+ 		hrtimer_cancel(&em485->start_tx_timer);
+@@ -1869,9 +1898,14 @@ int serial8250_handle_irq(struct uart_port *port, unsigned int iir)
+ 	unsigned char status;
+ 	unsigned long flags;
+ 	struct uart_8250_port *up = up_to_u8250p(port);
++	int retval = 1;
+ 
+-	if (iir & UART_IIR_NO_INT)
+-		return 0;
++	if (iir & UART_IIR_NO_INT) {
++		retval = 0;
++		if (!up->em485 ||
++		    !hrtimer_callback_running(&up->em485->soft_irq_timer))
++			return retval;
++	}
+ 
+ 	spin_lock_irqsave(&port->lock, flags);
+ 
+@@ -1887,7 +1921,8 @@ int serial8250_handle_irq(struct uart_port *port, unsigned int iir)
+ 		serial8250_tx_chars(up);
+ 
+ 	spin_unlock_irqrestore(&port->lock, flags);
+-	return 1;
++
++	return retval;
+ }
+ EXPORT_SYMBOL_GPL(serial8250_handle_irq);
+ 
+@@ -2652,6 +2687,36 @@ serial8250_do_set_termios(struct uart_port *port, struct ktermios *termios,
+ 	serial8250_rpm_get(up);
+ 	spin_lock_irqsave(&port->lock, flags);
+ 
++	if (up->em485) {
++		unsigned int bits;
++		unsigned int cflag = termios->c_cflag;
++		/* based on serial_core, compute byte size and parity */
++		switch (cflag & CSIZE) {
++		case CS5:
++			bits = 7;
++			break;
++		case CS6:
++			bits = 8;
++			break;
++		case CS7:
++			bits = 9;
++			break;
++		default:
++			bits = 10;
++			break; /* CS8 */
++		}
++
++		if (cflag & CSTOPB)
++			bits++;
++		if (cflag & PARENB)
++			bits++;
++
++		/* Add one bit time slop */
++		bits++;
++
++		up->em485->irq_timeout = ((NSEC_PER_MSEC * bits) / baud) * MSEC_PER_SEC;
++	}
++
+ 	up->lcr = cval;					/* Save computed LCR */
+ 
+ 	if (up->capabilities & UART_CAP_FIFO && port->fifosize > 1) {
+diff --git a/include/linux/serial_8250.h b/include/linux/serial_8250.h
+index bfb0453e1..ed04e9da6 100644
+--- a/include/linux/serial_8250.h
++++ b/include/linux/serial_8250.h
+@@ -83,6 +83,8 @@ struct uart_8250_em485 {
+ 	struct hrtimer		start_tx_timer; /* "rs485 start tx" timer */
+ 	struct hrtimer		stop_tx_timer;  /* "rs485 stop tx" timer */
+ 	struct hrtimer		*active_timer;  /* pointer to active timer */
++	struct hrtimer		soft_irq_timer; /* "rs485 soft irq" timer */
++	unsigned long		irq_timeout;	/* soft irq timeout in nsecs */
+ 	struct uart_8250_port	*port;          /* for hrtimer callbacks */
+ };
+ 
+-- 
+2.11.0
+
