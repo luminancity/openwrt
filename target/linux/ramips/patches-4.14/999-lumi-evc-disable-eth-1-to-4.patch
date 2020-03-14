@@ -1,0 +1,39 @@
+Index: linux-4.14.95/arch/mips/include/asm/mach-ralink/mt7620.h
+===================================================================
+--- linux-4.14.95.orig/arch/mips/include/asm/mach-ralink/mt7620.h
++++ linux-4.14.95/arch/mips/include/asm/mach-ralink/mt7620.h
+@@ -25,6 +25,7 @@
+ #define SYSC_REG_CPU_SYS_CLKCFG		0x3c
+ #define SYSC_REG_CPLL_CONFIG0		0x54
+ #define SYSC_REG_CPLL_CONFIG1		0x58
++#define SYSC_REG_AGPIO_CFG		0x3C
+ 
+ #define MT7620_CHIP_NAME0		0x3637544d
+ #define MT7620_CHIP_NAME1		0x20203032
+@@ -132,6 +133,12 @@
+ #define MT7620_GPIO_MODE_EPHY		15
+ #define MT7620_GPIO_MODE_PA		20
+ 
++#define MT7620_AGPIO_CFG_EPHY_0_DI	BIT(16)
++#define MT7620_AGPIO_CFG_EPHY_1_DI	BIT(17)
++#define MT7620_AGPIO_CFG_EPHY_2_DI	BIT(18)
++#define MT7620_AGPIO_CFG_EPHY_3_DI	BIT(19)
++#define MT7620_AGPIO_CFG_EPHY_4_DI	BIT(20)
++
+ static inline int mt7620_get_eco(void)
+ {
+ 	return rt_sysc_r32(SYSC_REG_CHIP_REV) & CHIP_REV_ECO_MASK;
+Index: linux-4.14.95/drivers/pinctrl/pinctrl-rt2880.c
+===================================================================
+--- linux-4.14.95.orig/drivers/pinctrl/pinctrl-rt2880.c
++++ linux-4.14.95/drivers/pinctrl/pinctrl-rt2880.c
+@@ -446,6 +446,9 @@ static int rt2880_pinmux_probe(struct pl
+ 		pinctrl_add_gpio_range(dev, range);
+ 	}
+ 
++	/* hack to disable ETH1-4 on MT7628AN */
++	rt_sysc_m32(0, MT7620_AGPIO_CFG_EPHY_1_DI | MT7620_AGPIO_CFG_EPHY_2_DI | MT7620_AGPIO_CFG_EPHY_3_DI | MT7620_AGPIO_CFG_EPHY_4_DI, SYSC_REG_AGPIO_CFG);
++
+ 	return 0;
+ }
+ 
