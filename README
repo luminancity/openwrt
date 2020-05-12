@@ -13,6 +13,11 @@ of a case sensitive file system.
 
 You need gcc, binutils, bzip2, flex, python, perl, make, find, grep, diff,
 unzip, gawk, getopt, subversion, libz-dev and libc headers installed.
+Ubuntu 20.04:
+  There are missing shared libraries. Make symlinks from the /snap/core18/current/lib/x86_64-linux-gnu
+  directory pointing to /usr/lib/x86_64-linux-gnu/ folder:
+    libncurses.so.5
+    libtinfo.so.5
 
 0.8 Clone the forked openwrt repo from Luminancity:
     git clone git@github.com:luminancity/openwrt.git
