@@ -38,6 +38,16 @@
 		};
 	};
 
+	keys {
+		compatible = "gpio-keys-polled";
+
+		reinit {
+			label = "reinit";
+			gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;
+			linux,code = <BTN_0>;
+		};
+	};
+
 };
 
 &firmware {
